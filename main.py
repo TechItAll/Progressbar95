@@ -10,9 +10,10 @@ os.system('cls' if os.name == 'nt' else 'clear')  # Clear console for better rea
 
 class Segment:
     """Represents a falling segment in the game"""
-    def __init__(self, x, y, color='#0066cc', value=5, segment_type='blue', points=100, speed=2):
+    def __init__(self, x, y, color='#0066cc', value=5, segment_type='blue', points=100, speed=2, wobble_range=0):
         self.x = x
         self.y = y
+        self.original_x = x  # Store original X position 
         self.color = color  # Segment color
         self.value = value  # Progress value when caught (5%)
         self.segment_type = segment_type  # 'blue', 'yellow', 'black'
@@ -21,6 +22,20 @@ class Segment:
         self.height = 20
         self.speed = speed  # Falling speed - now customizable per segment!
         self.widget = None  # Will hold the tkinter widget
+        
+        # Path-based movement properties
+        self.wobble_range = wobble_range  # How far targets can deviate from original_x
+        self.middle_target_x = 0  # Will be set when spawned
+        self.middle_target_y = 0  # Will be set when spawned  
+        self.bottom_target_x = 0  # Will be set when spawned
+        self.bottom_target_y = 0  # Will be set when spawned
+        self.current_target = "middle"  # "middle" or "bottom"
+        
+        # Debug visualization properties
+        self.debug_middle_box = None  # Canvas rectangle for middle target
+        self.debug_bottom_box = None  # Canvas rectangle for bottom target
+        self.debug_middle_line = None  # Canvas line to middle target
+        self.debug_bottom_line = None  # Canvas line to bottom target
 
 class ProgressBar95:
     def __init__(self):
@@ -30,9 +45,9 @@ class ProgressBar95:
         self.BLUE_SPEED = 3      # Blue segments fall faster (harder to catch) / Default 3
         self.YELLOW_SPEED = 2    # Yellow segments fall slower (easier to catch) / Default 2
         self.BLACK_SPEED = 2     # Black debug segments speed / Default 2 but idk why theres a speed here cuz debug segments dont fall
-        self.RED_SPEED = 4       # Red segments fall FAST (game over segments!)
-        self.PINK_SPEED = 2      # Pink segments fall same speed as yellow
-        self.GRAY_SPEED = 2      # Gray segments fall same speed as yellow
+        self.RED_SPEED = 4       # Red segments fall FAST (game over segments!) / Default 4 for extra danger
+        self.PINK_SPEED = 2      # Pink segments fall same speed as yellow / Default 2
+        self.GRAY_SPEED = 2      # Gray segments fall same speed as yellow / Default 2
         
         # ===========================================
         # EASY POINTS CONFIGURATION - ADJUST THESE!
@@ -48,6 +63,7 @@ class ProgressBar95:
         # DEBUG CONFIGURATION - ADJUST THIS!
         # ===========================================
         self.DEBUG_MODE = True   # Enable/disable debug controls (- = keys and B Y spawning)
+        self.DEBUG_SHOW_PATHS = True  # Show dotted target boxes and trace lines for segments
         self.SECONDARY_END_SCREENS = False  # Enable special end screens (pink win, etc.) vs normal end screen only
         
         # ===========================================
@@ -58,6 +74,19 @@ class ProgressBar95:
         self.RED_WEIGHT = 5      # Red segments spawn rarely (DANGER!)
         self.PINK_WEIGHT = 10    # Pink segments spawn occasionally (remove progress)
         self.GRAY_WEIGHT = 10    # Gray segments spawn occasionally (null progress)
+        
+        # ===========================================
+        # WOBBLE CONFIGURATION - ADJUST THESE! (Path-based movement ranges)
+        # ===========================================
+        # These determine how far left/right segments can target from their spawn position
+        # Higher values = segments can target points further away = more erratic paths
+        # Example: On 1920px screen, blue range = 480px means targets can be ±480px from spawn
+        self.BLUE_WOBBLE_RANGE = 400     # Blue segments can target far from spawn (hardest to predict)
+        self.YELLOW_WOBBLE_RANGE = 250   # Yellow segments target moderately far
+        self.RED_WOBBLE_RANGE = 100      # Red segments target close to spawn (more predictable)
+        self.PINK_WOBBLE_RANGE = 200     # Pink segments target moderately far
+        self.GRAY_WOBBLE_RANGE = 200     # Gray segments target moderately far  
+        self.BLACK_WOBBLE_RANGE = 0      # Black debug segments fall straight down
         # ===========================================
         
         self.root = tk.Tk()
@@ -112,6 +141,19 @@ class ProgressBar95:
         self.screen_window.attributes('-transparentcolor', 'white')
         self.screen_window.configure(bg='white')
         self.screen_window.attributes('-topmost', True)
+        
+        # Create debug canvas for drawing paths (only if debug mode enabled)
+        if self.DEBUG_SHOW_PATHS:
+            self.debug_canvas = tk.Canvas(
+                self.screen_window,
+                width=self.screen_width,
+                height=self.screen_height,
+                bg='white',
+                highlightthickness=0
+            )
+            self.debug_canvas.place(x=0, y=0)
+        else:
+            self.debug_canvas = None
         
         # Variables for dragging
         self.drag_start_x = 0
@@ -186,7 +228,6 @@ class ProgressBar95:
             self.root.bind('<KeyPress-r>', lambda e: self.spawn_debug_red())  # RED DANGER!
             self.root.bind('<KeyPress-p>', lambda e: self.spawn_debug_pink())  # PINK segments
             self.root.bind('<KeyPress-g>', lambda e: self.spawn_debug_gray())  # GRAY segments
-            self.root.bind('<KeyPress-p>', lambda e: self.spawn_debug_pink())  # PINK progress remover
         
         # Make sure the window can receive keyboard focus
         self.root.focus_set()
@@ -392,6 +433,121 @@ class ProgressBar95:
         else:
             print("No segments to remove!")
     
+    def setup_segment_targets(self, segment):
+        """Setup target positions for path-based movement"""
+        # Middle target (halfway down screen)
+        segment.middle_target_y = self.screen_height // 2
+        
+        # Bottom target (at bottom of screen)  
+        segment.bottom_target_y = self.screen_height
+        
+        # Calculate horizontal offsets (can be positive or negative)
+        max_offset = segment.wobble_range
+        
+        if max_offset > 0:
+            # Random offset for middle target
+            middle_offset = random.randint(-max_offset, max_offset)
+            segment.middle_target_x = segment.original_x + middle_offset
+            
+            # Random offset for bottom target  
+            bottom_offset = random.randint(-max_offset, max_offset)
+            segment.bottom_target_x = segment.original_x + bottom_offset
+            
+            # Keep targets within screen bounds
+            segment.middle_target_x = max(0, min(self.screen_width - segment.width, segment.middle_target_x))
+            segment.bottom_target_x = max(0, min(self.screen_width - segment.width, segment.bottom_target_x))
+        else:
+            # No wobble - targets stay at original X
+            segment.middle_target_x = segment.original_x
+            segment.bottom_target_x = segment.original_x
+    
+    def create_debug_visuals(self, segment):
+        """Create debug visual elements for a segment's path"""
+        if not self.DEBUG_SHOW_PATHS or not self.debug_canvas:
+            return
+        
+        # Create dotted boxes at target positions (15x25 to match segment size)
+        box_size = 15
+        box_height = 25
+        
+        # Middle target box (dotted outline)
+        segment.debug_middle_box = self.debug_canvas.create_rectangle(
+            segment.middle_target_x, segment.middle_target_y,
+            segment.middle_target_x + box_size, segment.middle_target_y + box_height,
+            outline=segment.color, fill="", width=2, dash=(5, 5)
+        )
+        
+        # Bottom target box (dotted outline)
+        segment.debug_bottom_box = self.debug_canvas.create_rectangle(
+            segment.bottom_target_x, segment.bottom_target_y - box_height,
+            segment.bottom_target_x + box_size, segment.bottom_target_y,
+            outline=segment.color, fill="", width=2, dash=(5, 5)
+        )
+        
+        # Create initial lines (will be updated in update_debug_visuals)
+        segment.debug_middle_line = self.debug_canvas.create_line(
+            segment.x + segment.width // 2, segment.y + segment.height // 2,
+            segment.middle_target_x + box_size // 2, segment.middle_target_y + box_height // 2,
+            fill=segment.color, width=2, dash=(3, 3)
+        )
+        
+        segment.debug_bottom_line = self.debug_canvas.create_line(
+            segment.x + segment.width // 2, segment.y + segment.height // 2,
+            segment.bottom_target_x + box_size // 2, segment.bottom_target_y - box_height // 2,
+            fill=segment.color, width=2, dash=(3, 3)
+        )
+    
+    def update_debug_visuals(self, segment):
+        """Update debug visual elements as segment moves"""
+        if not self.DEBUG_SHOW_PATHS or not self.debug_canvas:
+            return
+        
+        # Update line positions to follow the segment
+        segment_center_x = segment.x + segment.width // 2
+        segment_center_y = segment.y + segment.height // 2
+        
+        box_size = 15
+        box_height = 25
+        
+        # Update middle target line
+        if segment.debug_middle_line:
+            middle_target_center_x = segment.middle_target_x + box_size // 2
+            middle_target_center_y = segment.middle_target_y + box_height // 2
+            
+            self.debug_canvas.coords(
+                segment.debug_middle_line,
+                segment_center_x, segment_center_y,
+                middle_target_center_x, middle_target_center_y
+            )
+        
+        # Update bottom target line
+        if segment.debug_bottom_line:
+            bottom_target_center_x = segment.bottom_target_x + box_size // 2
+            bottom_target_center_y = segment.bottom_target_y - box_height // 2
+            
+            self.debug_canvas.coords(
+                segment.debug_bottom_line,
+                segment_center_x, segment_center_y,
+                bottom_target_center_x, bottom_target_center_y
+            )
+    
+    def remove_debug_visuals(self, segment):
+        """Remove debug visual elements for a segment"""
+        if not self.DEBUG_SHOW_PATHS or not self.debug_canvas:
+            return
+        
+        # Remove all debug elements
+        for element in [segment.debug_middle_box, segment.debug_bottom_box, 
+                       segment.debug_middle_line, segment.debug_bottom_line]:
+            if element:
+                self.debug_canvas.delete(element)
+        
+        # Clear references
+        segment.debug_middle_box = None
+        segment.debug_bottom_box = None
+        segment.debug_middle_line = None
+        segment.debug_bottom_line = None
+    
     def spawn_debug_blue(self):
         """Debug: Spawn a blue segment manually"""
         if not self.DEBUG_MODE:
@@ -401,9 +557,15 @@ class ProgressBar95:
         x = random.randint(50, self.screen_width - 80)
         y = -30  # Start above screen
         
-        segment = Segment(x, y, '#0066cc', 5, 'blue', self.BLUE_POINTS, self.BLUE_SPEED)
+        segment = Segment(x, y, '#0066cc', 5, 'blue', self.BLUE_POINTS, self.BLUE_SPEED, self.BLUE_WOBBLE_RANGE)
         segment.width = 15
         segment.height = 25
+        
+        # Setup target positions for path-based movement
+        self.setup_segment_targets(segment)
+        
+        # Create debug visuals if enabled
+        self.create_debug_visuals(segment)
         
         # Create visual widget for the segment on the fullscreen window
         segment.widget = tk.Frame(
@@ -428,9 +590,15 @@ class ProgressBar95:
         x = random.randint(50, self.screen_width - 80)
         y = -30  # Start above screen
         
-        segment = Segment(x, y, '#cccc00', 5, 'yellow', self.YELLOW_POINTS, self.YELLOW_SPEED)
+        segment = Segment(x, y, '#cccc00', 5, 'yellow', self.YELLOW_POINTS, self.YELLOW_SPEED, self.YELLOW_WOBBLE_RANGE)
         segment.width = 15
         segment.height = 25
+        
+        # Setup target positions for path-based movement
+        self.setup_segment_targets(segment)
+        
+        # Create debug visuals if enabled
+        self.create_debug_visuals(segment)
         
         # Create visual widget for the segment on the fullscreen window
         segment.widget = tk.Frame(
@@ -455,9 +623,15 @@ class ProgressBar95:
         x = random.randint(50, self.screen_width - 80)
         y = -30  # Start above screen
         
-        segment = Segment(x, y, '#cc0000', 0, 'red', self.RED_POINTS, self.RED_SPEED)
+        segment = Segment(x, y, '#cc0000', 0, 'red', self.RED_POINTS, self.RED_SPEED, self.RED_WOBBLE_RANGE)
         segment.width = 15
         segment.height = 25
+        
+        # Setup target positions for path-based movement
+        self.setup_segment_targets(segment)
+        
+        # Create debug visuals if enabled
+        self.create_debug_visuals(segment)
         
         # Create visual widget for the segment on the fullscreen window
         segment.widget = tk.Frame(
@@ -482,9 +656,15 @@ class ProgressBar95:
         x = random.randint(50, self.screen_width - 80)
         y = -30  # Start above screen
         
-        segment = Segment(x, y, '#ff69b4', 5, 'pink', self.PINK_POINTS, self.PINK_SPEED)
+        segment = Segment(x, y, '#ff69b4', 5, 'pink', self.PINK_POINTS, self.PINK_SPEED, self.PINK_WOBBLE_RANGE)
         segment.width = 15
         segment.height = 25
+        
+        # Setup target positions for path-based movement
+        self.setup_segment_targets(segment)
+        
+        # Create debug visuals if enabled
+        self.create_debug_visuals(segment)
         
         # Create visual widget for the segment on the fullscreen window
         segment.widget = tk.Frame(
@@ -509,9 +689,15 @@ class ProgressBar95:
         x = random.randint(50, self.screen_width - 80)
         y = -30  # Start above screen
         
-        segment = Segment(x, y, '#808080', 0, 'gray', self.GRAY_POINTS, self.GRAY_SPEED)
+        segment = Segment(x, y, '#808080', 0, 'gray', self.GRAY_POINTS, self.GRAY_SPEED, self.GRAY_WOBBLE_RANGE)
         segment.width = 15
         segment.height = 25
+        
+        # Setup target positions for path-based movement
+        self.setup_segment_targets(segment)
+        
+        # Create debug visuals if enabled
+        self.create_debug_visuals(segment)
         
         # Create visual widget for the segment on the fullscreen window
         segment.widget = tk.Frame(
@@ -603,24 +789,30 @@ class ProgressBar95:
         # Randomly choose segment type based on weights
         rand = random.random()
         if rand < blue_chance:
-            # Blue segment (normal) - faster speed, more points
-            segment = Segment(x, y, '#0066cc', 5, 'blue', self.BLUE_POINTS, self.BLUE_SPEED)
+            # Blue segment (normal) - faster speed, more points, most wobble
+            segment = Segment(x, y, '#0066cc', 5, 'blue', self.BLUE_POINTS, self.BLUE_SPEED, self.BLUE_WOBBLE_RANGE)
         elif rand < blue_chance + yellow_chance:
-            # Yellow segment (corrupted) - slower speed, fewer points
-            segment = Segment(x, y, '#cccc00', 5, 'yellow', self.YELLOW_POINTS, self.YELLOW_SPEED)
+            # Yellow segment (corrupted) - slower speed, fewer points, moderate wobble
+            segment = Segment(x, y, '#cccc00', 5, 'yellow', self.YELLOW_POINTS, self.YELLOW_SPEED, self.YELLOW_WOBBLE_RANGE)
         elif rand < blue_chance + yellow_chance + red_chance:
-            # RED segment (GAME OVER!) - fast speed, deadly
-            segment = Segment(x, y, '#cc0000', 0, 'red', self.RED_POINTS, self.RED_SPEED)
+            # RED segment (GAME OVER!) - fast speed, deadly, slight wobble
+            segment = Segment(x, y, '#cc0000', 0, 'red', self.RED_POINTS, self.RED_SPEED, self.RED_WOBBLE_RANGE)
         elif rand < blue_chance + yellow_chance + red_chance + pink_chance:
-            # PINK segment (removes progress) - same speed as yellow, negative points
-            segment = Segment(x, y, '#ff69b4', 5, 'pink', self.PINK_POINTS, self.PINK_SPEED)
+            # PINK segment (removes progress) - same speed as yellow, negative points, moderate wobble
+            segment = Segment(x, y, '#ff69b4', 5, 'pink', self.PINK_POINTS, self.PINK_SPEED, self.PINK_WOBBLE_RANGE)
         else:
-            # GRAY segment (null progress) - no value, no points
-            segment = Segment(x, y, '#808080', 0, 'gray', self.GRAY_POINTS, self.GRAY_SPEED)
+            # GRAY segment (null progress) - no value, no points, moderate wobble
+            segment = Segment(x, y, '#808080', 0, 'gray', self.GRAY_POINTS, self.GRAY_SPEED, self.GRAY_WOBBLE_RANGE)
         
         # Make segments thinner like progress bar segments
         segment.width = 15  # Thinner like progress bar segments
         segment.height = 25
+        
+        # Setup target positions for path-based movement
+        self.setup_segment_targets(segment)
+        
+        # Create debug visuals if enabled
+        self.create_debug_visuals(segment)
         
         # Create visual widget for the segment on the fullscreen window
         segment.widget = tk.Frame(
@@ -780,7 +972,7 @@ class ProgressBar95:
         self.root.after(1000, self.show_blue_screen)
     
     def update_segments(self):
-        """Update positions of all falling segments"""
+        """Update positions of all falling segments with path-based movement"""
         if self.game_frozen:  # Don't update when frozen
             return
             
@@ -790,9 +982,41 @@ class ProgressBar95:
             # Move segment down
             segment.y += segment.speed
             
+            # Path-based horizontal movement
+            if segment.wobble_range > 0:
+                # Determine current target position
+                if segment.current_target == "middle":
+                    target_x = segment.middle_target_x
+                    target_y = segment.middle_target_y
+                    
+                    # Check if we've reached the middle target (within reasonable distance)
+                    if segment.y >= target_y - 20:  # 20px tolerance
+                        segment.current_target = "bottom"
+                        target_x = segment.bottom_target_x
+                        target_y = segment.bottom_target_y
+                else:
+                    target_x = segment.bottom_target_x
+                    target_y = segment.bottom_target_y
+                
+                # Move horizontally towards target
+                dx = target_x - segment.x
+                if abs(dx) > 1:  # Only move if we're not close enough
+                    # Move slowly towards target (adjust speed factor as needed)
+                    move_speed = max(1, abs(dx) / 20)  # Slower when further away
+                    if dx > 0:
+                        segment.x += min(move_speed, dx)
+                    else:
+                        segment.x -= min(move_speed, -dx)
+                
+                # Keep segments within screen bounds
+                segment.x = max(0, min(self.screen_width - segment.width, segment.x))
+            
             # Update visual position
             if segment.widget:
-                segment.widget.place(x=segment.x, y=segment.y)
+                segment.widget.place(x=int(segment.x), y=int(segment.y))
+            
+            # Update debug visuals if enabled
+            self.update_debug_visuals(segment)
             
             # Check if segment hit the bottom of screen
             if segment.y > self.screen_height:
@@ -1265,16 +1489,31 @@ class ProgressBar95:
         gray_label.pack(pady=2)
     
     def create_pie_chart(self):
-        """Create a simple pie chart showing segment distribution"""
+        """Create a simple pie chart showing segment distribution based on final progress bar state"""
         chart_frame = tk.Frame(self.end_window, bg='#c0c0c0')
         chart_frame.pack(pady=20)
         
         canvas = tk.Canvas(chart_frame, width=200, height=200, bg='white')
         canvas.pack()
         
-        # Calculate angles for pie chart (include all segment types)
-        total_segments = (self.blue_segments_caught + self.yellow_segments_caught + 
-                         self.pink_segments_caught + self.gray_segments_caught)
+        # Count segments actually in the final progress bar
+        blue_count = 0
+        yellow_count = 0
+        pink_count = 0
+        gray_count = 0
+        
+        for segment in self.progress_segments:
+            if segment['type'] == 'blue':
+                blue_count += 1
+            elif segment['type'] == 'yellow':
+                yellow_count += 1
+            elif segment['type'] == 'pink':
+                pink_count += 1
+            elif segment['type'] == 'gray':
+                gray_count += 1
+        
+        total_segments = blue_count + yellow_count + pink_count + gray_count
+        
         if total_segments == 0:
             # No segments, show empty circle
             canvas.create_oval(10, 10, 190, 190, outline='gray', fill='lightgray', width=2)
@@ -1282,24 +1521,24 @@ class ProgressBar95:
             return
         
         # Handle special cases for single-color victories
-        if self.pink_segments_caught > 0 and self.blue_segments_caught == 0 and self.yellow_segments_caught == 0 and self.gray_segments_caught == 0:
+        if pink_count > 0 and blue_count == 0 and yellow_count == 0 and gray_count == 0:
             # All pink - draw full pink circle
             canvas.create_oval(10, 10, 190, 190, fill='#ff69b4', outline='black', width=2)
-        elif self.gray_segments_caught > 0 and self.blue_segments_caught == 0 and self.yellow_segments_caught == 0 and self.pink_segments_caught == 0:
+        elif gray_count > 0 and blue_count == 0 and yellow_count == 0 and pink_count == 0:
             # All gray - draw full gray circle
             canvas.create_oval(10, 10, 190, 190, fill='#808080', outline='black', width=2)
-        elif self.blue_segments_caught > 0 and self.yellow_segments_caught == 0 and self.pink_segments_caught == 0 and self.gray_segments_caught == 0:
+        elif blue_count > 0 and yellow_count == 0 and pink_count == 0 and gray_count == 0:
             # All blue - draw full blue circle
             canvas.create_oval(10, 10, 190, 190, fill='#0066cc', outline='black', width=2)
-        elif self.yellow_segments_caught > 0 and self.blue_segments_caught == 0 and self.pink_segments_caught == 0 and self.gray_segments_caught == 0:
+        elif yellow_count > 0 and blue_count == 0 and pink_count == 0 and gray_count == 0:
             # All yellow - draw full yellow circle
             canvas.create_oval(10, 10, 190, 190, fill='#cccc00', outline='black', width=2)
         else:
             # Mixed segments - draw pie slices
-            blue_angle = (self.blue_segments_caught / total_segments) * 360
-            yellow_angle = (self.yellow_segments_caught / total_segments) * 360
-            pink_angle = (self.pink_segments_caught / total_segments) * 360
-            gray_angle = (self.gray_segments_caught / total_segments) * 360
+            blue_angle = (blue_count / total_segments) * 360
+            yellow_angle = (yellow_count / total_segments) * 360
+            pink_angle = (pink_count / total_segments) * 360
+            gray_angle = (gray_count / total_segments) * 360
             
             # Draw pie slices
             current_angle = 0
@@ -1495,6 +1734,9 @@ class ProgressBar95:
     
     def remove_segment(self, segment):
         """Remove a segment from the game"""
+        # Remove debug visuals if enabled
+        self.remove_debug_visuals(segment)
+        
         if segment in self.segments:
             self.segments.remove(segment)
         if segment.widget:
