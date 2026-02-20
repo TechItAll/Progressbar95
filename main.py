@@ -3,23 +3,42 @@ from tkinter import ttk
 import threading
 import time
 import random
+import math
+from tkinter import font
 import os
 os.system('cls' if os.name == 'nt' else 'clear')  # Clear console for better readability
 
 class Segment:
     """Represents a falling segment in the game"""
-    def __init__(self, x, y, color='#0066cc', value=5):
+    def __init__(self, x, y, color='#0066cc', value=5, segment_type='blue', points=100, speed=2):
         self.x = x
         self.y = y
-        self.color = color  # Blue segments
+        self.color = color  # Segment color
         self.value = value  # Progress value when caught (5%)
+        self.segment_type = segment_type  # 'blue', 'yellow', 'black'
+        self.points = points  # Points awarded when caught
         self.width = 30
         self.height = 20
-        self.speed = 2  # Falling speed
+        self.speed = speed  # Falling speed - now customizable per segment!
         self.widget = None  # Will hold the tkinter widget
 
 class ProgressBar95:
     def __init__(self):
+        # ===========================================
+        # EASY SPEED CONFIGURATION - ADJUST THESE!
+        # ===========================================
+        self.BLUE_SPEED = 3      # Blue segments fall faster (harder to catch) / Default 3
+        self.YELLOW_SPEED = 2    # Yellow segments fall slower (easier to catch) / Default 2
+        self.BLACK_SPEED = 2     # Black debug segments speed / Default 2 but idk why theres a speed here cuz debug segments dont fall
+        
+        # ===========================================
+        # EASY POINTS CONFIGURATION - ADJUST THESE!
+        # ===========================================
+        self.BLUE_POINTS = 100   # Points for catching blue segments
+        self.YELLOW_POINTS = 50  # Points for catching yellow segments (corrupted)
+        self.BLACK_POINTS = 0    # Points for black segments (debug only)
+        # ===========================================
+        
         self.root = tk.Tk()
         self.root.title("Progressbar 95")
         
@@ -36,7 +55,13 @@ class ProgressBar95:
         
         # Progress value (0-100) - now supporting multiple colors
         self.progress_value = 0
-        self.progress_segments = []  # List of progress segments: [{'color': '#color', 'value': 5}, ...]
+        self.progress_segments = []  # List of progress segments: [{'color': '#color', 'value': 5, 'type': 'blue'}, ...]
+        
+        # Point system
+        self.total_points = 0
+        self.blue_segments_caught = 0
+        self.yellow_segments_caught = 0
+        self.black_segments_added = 0
         
         # Game variables
         self.segments = []  # List of falling segments
@@ -44,6 +69,7 @@ class ProgressBar95:
         self.last_spawn_time = time.time()
         self.spawn_delay = random.uniform(1.0, 3.0)  # Random spawn timing
         self.game_running = False
+        self.game_ended = False
         self.screen_width = self.root.winfo_screenwidth()
         self.screen_height = self.root.winfo_screenheight()
         
@@ -182,12 +208,31 @@ class ProgressBar95:
         self.progress_value = max(0, min(100, value))
         self.update_progress_display()
     
-    def add_progress_segment(self, color, value):
+    def add_progress_segment(self, color, value, segment_type='blue', points=0):
         """Add a colored progress segment"""
         if self.progress_value + value <= 100:
-            self.progress_segments.append({'color': color, 'value': value})
+            self.progress_segments.append({
+                'color': color, 
+                'value': value, 
+                'type': segment_type
+            })
             self.progress_value += value
+            self.total_points += points
+            
+            # Track segment counts for end screen stats
+            if segment_type == 'blue':
+                self.blue_segments_caught += 1
+            elif segment_type == 'yellow':
+                self.yellow_segments_caught += 1
+            elif segment_type == 'black':
+                self.black_segments_added += 1
+            
             self.update_progress_display()
+            
+            # Check for game completion
+            if self.progress_value >= 100:
+                self.end_game()
+            
             return True
         return False
     
@@ -202,9 +247,9 @@ class ProgressBar95:
     
     def increase_progress(self):
         """Add a black segment (5%)"""
-        success = self.add_progress_segment('#000000', 5)  # Black segment
+        success = self.add_progress_segment('#000000', 5, 'black', self.BLACK_POINTS)  # Use configurable points
         if success:
-            print(f"Black segment added! +5% -> {self.progress_value}%")
+            print(f"Black debug segment added! +5% -> {self.progress_value}%")
         else:
             print("Progress bar full - cannot add more segments!")
     
@@ -219,12 +264,22 @@ class ProgressBar95:
     def exit_program(self, event=None):
         """Exit the program"""
         self.game_running = False
+        self.game_ended = True
+        
         # Clean up segments
         for segment in self.segments:
             if segment.widget:
                 segment.widget.destroy()
-        if hasattr(self, 'screen_window'):
-            self.screen_window.destroy()
+        
+        # Clean up windows
+        try:
+            if hasattr(self, 'screen_window'):
+                self.screen_window.destroy()
+            if hasattr(self, 'end_window'):
+                self.end_window.destroy()
+        except:
+            pass
+            
         self.root.quit()
         self.root.destroy()
     
@@ -235,13 +290,13 @@ class ProgressBar95:
     
     def game_loop(self):
         """Main game loop - handles segment spawning, movement, and collision detection"""
-        if not self.game_running:
+        if not self.game_running or self.game_ended:
             return
         
         current_time = time.time()
         
-        # Spawn new segments if needed
-        if (len(self.segments) < self.max_segments and 
+        # Spawn new segments if needed (only if game hasn't ended)
+        if (not self.game_ended and len(self.segments) < self.max_segments and 
             current_time - self.last_spawn_time > self.spawn_delay):
             self.spawn_segment()
             self.last_spawn_time = current_time
@@ -250,19 +305,27 @@ class ProgressBar95:
         # Update all segments
         self.update_segments()
         
-        # Check for collisions
-        self.check_collisions()
+        # Check for collisions (only if game hasn't ended)
+        if not self.game_ended:
+            self.check_collisions()
         
         # Schedule next game loop iteration
         self.root.after(50, self.game_loop)  # 20 FPS
     
     def spawn_segment(self):
-        """Spawn a new blue segment at the top of the screen"""
+        """Spawn a new segment at the top of the screen"""
         # Random X position within screen bounds
         x = random.randint(50, self.screen_width - 80)
         y = -30  # Start above screen
         
-        segment = Segment(x, y, '#0066cc', 5)  # Blue segment worth 5%
+        # Randomly choose segment type: 70% blue, 30% yellow
+        if random.random() < 0.7:
+            # Blue segment (normal) - faster speed, more points
+            segment = Segment(x, y, '#0066cc', 5, 'blue', self.BLUE_POINTS, self.BLUE_SPEED)
+        else:
+            # Yellow segment (corrupted) - slower speed, fewer points
+            segment = Segment(x, y, '#cccc00', 5, 'yellow', self.YELLOW_POINTS, self.YELLOW_SPEED)
+        
         # Make segments thinner like progress bar segments
         segment.width = 15  # Thinner like progress bar segments
         segment.height = 25
@@ -324,20 +387,216 @@ class ProgressBar95:
                 
                 if collision_x_relative > empty_start:
                     # Caught in empty area - add colored progress!
-                    success = self.add_progress_segment(segment.color, segment.value)
+                    success = self.add_progress_segment(
+                        segment.color, 
+                        segment.value, 
+                        segment.segment_type, 
+                        segment.points
+                    )
                     if success:
-                        print(f"Blue segment caught! +{segment.value}% -> {self.progress_value}%")
+                        print(f"{segment.segment_type.title()} segment caught! +{segment.value}% (+{segment.points} points) -> {self.progress_value}%")
                     else:
                         print("Progress bar full!")
                 else:
                     # Hit filled area - segment breaks
-                    print("Segment broken on filled area!")
+                    print(f"{segment.segment_type.title()} segment broken on filled area!")
                 
                 segments_to_remove.append(segment)
         
         # Remove caught/broken segments
         for segment in segments_to_remove:
             self.remove_segment(segment)
+    
+    def end_game(self):
+        """End the game and show results screen"""
+        self.game_ended = True
+        self.game_running = False
+        
+        # Stop all falling segments
+        for segment in self.segments:
+            if segment.widget:
+                segment.widget.destroy()
+        self.segments.clear()
+        
+        # Hide the fullscreen window
+        self.screen_window.withdraw()
+        
+        # Show end screen
+        self.show_end_screen()
+    
+    def show_end_screen(self):
+        """Display the end screen with results"""
+        # Create end screen window
+        self.end_window = tk.Toplevel(self.root)
+        self.end_window.title("Progressbar 95 - Complete!")
+        self.end_window.geometry("500x600+200+100")
+        self.end_window.configure(bg='#c0c0c0')
+        self.end_window.attributes('-topmost', True)
+        
+        # Title
+        title_label = tk.Label(
+            self.end_window,
+            text="Progress Complete!",
+            font=('MS Sans Serif', 16, 'bold'),
+            bg='#c0c0c0',
+            fg='black'
+        )
+        title_label.pack(pady=20)
+        
+        # Progress bar replica
+        self.create_end_screen_progress_bar()
+        
+        # Stats
+        self.create_end_screen_stats()
+        
+        # Pie chart
+        self.create_pie_chart()
+        
+        # Points display
+        points_label = tk.Label(
+            self.end_window,
+            text=f"Total Points: {self.total_points}",
+            font=('MS Sans Serif', 14, 'bold'),
+            bg='#c0c0c0',
+            fg='blue'
+        )
+        points_label.pack(pady=10)
+        
+        # Close button
+        close_btn = tk.Button(
+            self.end_window,
+            text="Close Game",
+            font=('MS Sans Serif', 12),
+            command=self.exit_program,
+            relief='raised',
+            bd=2
+        )
+        close_btn.pack(pady=20)
+    
+    def create_end_screen_progress_bar(self):
+        """Create a replica of the progress bar showing final segments"""
+        bar_frame = tk.Frame(
+            self.end_window,
+            relief='sunken',
+            bd=2,
+            bg='#c0c0c0'
+        )
+        bar_frame.pack(pady=20, padx=50, fill='x')
+        
+        progress_frame = tk.Frame(
+            bar_frame,
+            relief='sunken',
+            bd=1,
+            bg='#9e9e9e',
+            height=32
+        )
+        progress_frame.pack(fill='both', expand=True, padx=5, pady=5)
+        progress_frame.pack_propagate(False)
+        
+        # Recreate segments
+        current_x = 0
+        total_width = 400  # Fixed width for end screen
+        
+        for segment in self.progress_segments:
+            segment_width = int((segment['value'] / 100) * total_width)
+            if segment_width > 0:
+                fill = tk.Frame(
+                    progress_frame,
+                    bg=segment['color'],
+                    height=32,
+                    bd=0,
+                    relief='flat'
+                )
+                fill.place(x=current_x, y=0, width=segment_width, height=32)
+                current_x += segment_width
+        
+        # Add percentage text
+        percent_label = tk.Label(
+            progress_frame,
+            text="100%",
+            font=('MS Sans Serif', 10, 'bold'),
+            fg='white',
+            bd=0,
+            highlightthickness=0,
+            bg='#9e9e9e'
+        )
+        percent_label.place(relx=0.5, rely=0.5, anchor='center')
+    
+    def create_end_screen_stats(self):
+        """Create statistics display"""
+        stats_frame = tk.Frame(self.end_window, bg='#c0c0c0')
+        stats_frame.pack(pady=10)
+        
+        # Calculate percentages (excluding black segments)
+        total_colored = self.blue_segments_caught + self.yellow_segments_caught
+        if total_colored > 0:
+            blue_percent = round((self.blue_segments_caught / total_colored) * 100)
+            yellow_percent = round((self.yellow_segments_caught / total_colored) * 100)
+        else:
+            blue_percent = yellow_percent = 0
+        
+        correct_label = tk.Label(
+            stats_frame,
+            text=f"Correct: {blue_percent}%",
+            font=('MS Sans Serif', 12, 'bold'),
+            bg='#c0c0c0',
+            fg='#0066cc'
+        )
+        correct_label.pack(pady=5)
+        
+        corrupt_label = tk.Label(
+            stats_frame,
+            text=f"Corrupt: {yellow_percent}%",
+            font=('MS Sans Serif', 12, 'bold'),
+            bg='#c0c0c0',
+            fg='#cccc00'
+        )
+        corrupt_label.pack(pady=5)
+        
+        # Segment counts
+        counts_label = tk.Label(
+            stats_frame,
+            text=f"Blue: {self.blue_segments_caught} | Yellow: {self.yellow_segments_caught}",
+            font=('MS Sans Serif', 10),
+            bg='#c0c0c0',
+            fg='black'
+        )
+        counts_label.pack(pady=5)
+    
+    def create_pie_chart(self):
+        """Create a simple pie chart showing segment distribution"""
+        chart_frame = tk.Frame(self.end_window, bg='#c0c0c0')
+        chart_frame.pack(pady=20)
+        
+        canvas = tk.Canvas(chart_frame, width=200, height=200, bg='white')
+        canvas.pack()
+        
+        # Calculate angles for pie chart
+        total_colored = self.blue_segments_caught + self.yellow_segments_caught
+        if total_colored == 0:
+            # No segments, show empty circle
+            canvas.create_oval(10, 10, 190, 190, outline='gray', fill='lightgray', width=2)
+            canvas.create_text(100, 100, text="No segments", font=('Arial', 10))
+            return
+        
+        blue_angle = (self.blue_segments_caught / total_colored) * 360
+        yellow_angle = (self.yellow_segments_caught / total_colored) * 360
+        
+        # Draw pie slices
+        current_angle = 0
+        
+        # Blue slice
+        if blue_angle > 0:
+            canvas.create_arc(10, 10, 190, 190, 
+                            start=current_angle, extent=blue_angle,
+                            fill='#0066cc', outline='black', width=2)
+            current_angle += blue_angle
+        
+        # Yellow slice
+        if yellow_angle > 0:
+            canvas.create_arc(10, 10, 190, 190, 
+                            start=current_angle, extent=yellow_angle,
+                            fill='#cccc00', outline='black', width=2)
     
     def remove_segment(self, segment):
         """Remove a segment from the game"""
