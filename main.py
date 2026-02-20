@@ -31,6 +31,8 @@ class ProgressBar95:
         self.YELLOW_SPEED = 2    # Yellow segments fall slower (easier to catch) / Default 2
         self.BLACK_SPEED = 2     # Black debug segments speed / Default 2 but idk why theres a speed here cuz debug segments dont fall
         self.RED_SPEED = 4       # Red segments fall FAST (game over segments!)
+        self.PINK_SPEED = 2      # Pink segments fall same speed as yellow
+        self.GRAY_SPEED = 2      # Gray segments fall same speed as yellow
         
         # ===========================================
         # EASY POINTS CONFIGURATION - ADJUST THESE!
@@ -39,18 +41,23 @@ class ProgressBar95:
         self.YELLOW_POINTS = 50  # Points for catching yellow segments (corrupted)
         self.BLACK_POINTS = 0    # Points for black segments (debug only)
         self.RED_POINTS = 0      # Red segments = game over (no points)
+        self.PINK_POINTS = -100  # Pink segments = lose 100 points
+        self.GRAY_POINTS = 0     # Gray segments = no points
         
         # ===========================================
         # DEBUG CONFIGURATION - ADJUST THIS!
         # ===========================================
-        self.DEBUG_MODE = False   # Enable/disable debug controls (- = keys and B Y spawning)
+        self.DEBUG_MODE = True   # Enable/disable debug controls (- = keys and B Y spawning)
+        self.SECONDARY_END_SCREENS = False  # Enable special end screens (pink win, etc.) vs normal end screen only
         
         # ===========================================
         # SPAWN WEIGHTS - ADJUST THESE! (Higher = more frequent)
         # ===========================================
-        self.BLUE_WEIGHT = 70    # Blue segments spawn most often
+        self.BLUE_WEIGHT = 50    # Blue segments spawn most often
         self.YELLOW_WEIGHT = 25  # Yellow segments spawn regularly  
         self.RED_WEIGHT = 5      # Red segments spawn rarely (DANGER!)
+        self.PINK_WEIGHT = 10    # Pink segments spawn occasionally (remove progress)
+        self.GRAY_WEIGHT = 10    # Gray segments spawn occasionally (null progress)
         # ===========================================
         
         self.root = tk.Tk()
@@ -67,15 +74,19 @@ class ProgressBar95:
         # Make window stay on top
         self.root.attributes('-topmost', True)
         
-        # Progress value (0-100) - now supporting multiple colors
+        # Progress value (0-100) - now supporting multiple colors and negative values
         self.progress_value = 0
         self.progress_segments = []  # List of progress segments: [{'color': '#color', 'value': 5, 'type': 'blue'}, ...]
+        self.null_count = 0  # Count of gray NULL segments when bar is empty
+        self.in_pink_mode = False  # Track if we're in special pink mode
         
         # Point system
         self.total_points = 0
         self.blue_segments_caught = 0
         self.yellow_segments_caught = 0
         self.black_segments_added = 0
+        self.pink_segments_caught = 0
+        self.gray_segments_caught = 0
         
         # Game over system
         self.red_segment_hit = False
@@ -173,6 +184,9 @@ class ProgressBar95:
             self.root.bind('<KeyPress-b>', lambda e: self.spawn_debug_blue())
             self.root.bind('<KeyPress-y>', lambda e: self.spawn_debug_yellow())
             self.root.bind('<KeyPress-r>', lambda e: self.spawn_debug_red())  # RED DANGER!
+            self.root.bind('<KeyPress-p>', lambda e: self.spawn_debug_pink())  # PINK segments
+            self.root.bind('<KeyPress-g>', lambda e: self.spawn_debug_gray())  # GRAY segments
+            self.root.bind('<KeyPress-p>', lambda e: self.spawn_debug_pink())  # PINK progress remover
         
         # Make sure the window can receive keyboard focus
         self.root.focus_set()
@@ -202,32 +216,47 @@ class ProgressBar95:
         pass
     
     def update_progress_display(self):
-        """Update the visual progress bar with multiple colored segments"""
+        """Update the visual progress bar with multiple colored segments (supports negative values and special modes)"""
         # Clear all existing progress fills
         for fill in self.progress_fills:
             fill.destroy()
         self.progress_fills.clear()
         
-        # Calculate total progress and create colored segments
-        current_x = 0
-        total_width = self.window_width - 20  # Account for padding
-        
-        for segment in self.progress_segments:
-            segment_width = int((segment['value'] / 100) * total_width)
-            if segment_width > 0:
-                fill = tk.Frame(
-                    self.progress_frame,
-                    bg=segment['color'],
-                    height=32,
-                    bd=0,
-                    relief='flat'
-                )
-                fill.place(x=current_x, y=0, width=segment_width, height=32)
-                self.progress_fills.append(fill)
-                current_x += segment_width
-        
-        # Update percentage text and keep it on top
-        self.percent_label.config(text=f"{self.progress_value}%")
+        # Handle special display states (NULL/PINK mode with no visual segments)
+        if self.null_count > 0 and self.progress_value == 0:
+            # NULL mode - show NULL# but no visual segment
+            null_text = f"NULL{(self.null_count-1)*5}"
+            self.percent_label.config(text=null_text, fg="#808080")  # Gray text for NULL
+        elif self.in_pink_mode and self.progress_value == 0:
+            # PINK mode - show PINK but no visual segment
+            self.percent_label.config(text="PINK", fg="#ff69b4")  # Pink text
+        else:
+            # Normal mode - calculate segments and show percentage
+            current_x = 0
+            total_width = self.window_width - 20  # Account for padding
+            
+            for segment in self.progress_segments:
+                segment_width = int((abs(segment['value']) / 100) * total_width)  # Use abs for width calculation
+                if segment_width > 0:
+                    fill = tk.Frame(
+                        self.progress_frame,
+                        bg=segment['color'],
+                        height=32,
+                        bd=0,
+                        relief='flat'
+                    )
+                    fill.place(x=current_x, y=0, width=segment_width, height=32)
+                    self.progress_fills.append(fill)
+                    current_x += segment_width
+            
+            # Update percentage text color based on value
+            if self.progress_value < 0:
+                # Pink text for negative values
+                self.percent_label.config(text=f"{self.progress_value}%", fg="#ff69b4")
+            else:
+                # White text for positive values
+                self.percent_label.config(text=f"{self.progress_value}%", fg="white")
+                
         self.percent_label.lift()  # Keep percentage text visible above colored segments
     
     def set_progress(self, value):
@@ -236,32 +265,77 @@ class ProgressBar95:
         self.update_progress_display()
     
     def add_progress_segment(self, color, value, segment_type='blue', points=0):
-        """Add a colored progress segment"""
-        if self.progress_value + value <= 100:
-            self.progress_segments.append({
-                'color': color, 
-                'value': value, 
-                'type': segment_type
-            })
-            self.progress_value += value
+        """Add a colored progress segment (supports negative values for pink segments)"""
+        # For pink segments, allow negative values and special completion check
+        if segment_type == 'pink':
+            print(f"Debug: Adding pink segment, current progress: {self.progress_value}%, in_pink_mode: {self.in_pink_mode}")
+            # If we were in PINK mode, transition to actual negative values
+            if self.in_pink_mode:
+                # Transition from PINK mode to -5%
+                self.progress_value = -5
+                self.in_pink_mode = False
+                self.progress_segments.append({
+                    'color': color, 
+                    'value': -5, 
+                    'type': segment_type
+                })
+                print(f"Debug: Transitioned from PINK mode to {self.progress_value}%")
+            else:
+                # Regular pink segment addition
+                old_progress = self.progress_value
+                if self.progress_value + value >= -100:
+                    self.progress_value += value
+                    self.progress_segments.append({
+                        'color': color, 
+                        'value': value, 
+                        'type': segment_type
+                    })
+                    print(f"Debug: Added pink segment, {old_progress}% + {value} = {self.progress_value}%")
+                else:
+                    print(f"Debug: Pink segment rejected, would exceed -100%")
+                    return False
+            
             self.total_points += points
-            
-            # Track segment counts for end screen stats
-            if segment_type == 'blue':
-                self.blue_segments_caught += 1
-            elif segment_type == 'yellow':
-                self.yellow_segments_caught += 1
-            elif segment_type == 'black':
-                self.black_segments_added += 1
-            
             self.update_progress_display()
             
-            # Check for game completion
-            if self.progress_value >= 100:
-                self.end_game()
+            # Check for pink win condition
+            if self.progress_value <= -100:
+                print("🌸 PINK VICTORY ACHIEVED!")
+                if self.SECONDARY_END_SCREENS:
+                    self.end_game_pink_win()
+                else:
+                    self.end_game()  # Use normal end screen
             
             return True
-        return False
+        else:
+            # Regular segments - normal logic but check bounds
+            if self.progress_value + value <= 100 and self.progress_value + value >= 0:
+                self.progress_segments.append({
+                    'color': color, 
+                    'value': value, 
+                    'type': segment_type
+                })
+                self.progress_value += value
+                self.total_points += points
+                
+                # Track segment counts for end screen stats
+                if segment_type == 'blue':
+                    self.blue_segments_caught += 1
+                elif segment_type == 'yellow':
+                    self.yellow_segments_caught += 1
+                elif segment_type == 'black':
+                    self.black_segments_added += 1
+                elif segment_type == 'pink':
+                    self.pink_segments_caught += 1
+                
+                self.update_progress_display()
+                
+                # Check for game completion
+                if self.progress_value >= 100:
+                    self.end_game()
+                
+                return True
+            return False
     
     def remove_last_segment(self):
         """Remove the last progress segment"""
@@ -271,6 +345,30 @@ class ProgressBar95:
             self.update_progress_display()
             return True
         return False
+    
+    def remove_all_pink_segments(self):
+        """Remove all pink segments from the progress bar when a non-pink segment is caught"""
+        pink_count = 0
+        segments_to_remove = []
+        
+        # Find all pink segments
+        for i, segment in enumerate(self.progress_segments):
+            if segment['type'] == 'pink':
+                segments_to_remove.append(i)
+                pink_count += 1
+        
+        # Remove pink segments (reverse order to maintain indices)
+        for i in reversed(segments_to_remove):
+            removed_segment = self.progress_segments.pop(i)
+            self.progress_value -= removed_segment['value']  # Subtract negative value (so it increases)
+        
+        # Reset special states
+        self.in_pink_mode = False
+        
+        if pink_count > 0:
+            self.update_progress_display()
+            
+        return pink_count
     
     def increase_progress(self):
         """Add a black segment (5%)"""
@@ -375,6 +473,60 @@ class ProgressBar95:
         self.segments.append(segment)
         print(f"💀 Debug: RED DANGER SEGMENT spawned at position {x}!")
     
+    def spawn_debug_pink(self):
+        """Debug: Spawn a PINK segment manually - Progress remover!"""
+        if not self.DEBUG_MODE:
+            return
+        
+        # Random X position within screen bounds
+        x = random.randint(50, self.screen_width - 80)
+        y = -30  # Start above screen
+        
+        segment = Segment(x, y, '#ff69b4', 5, 'pink', self.PINK_POINTS, self.PINK_SPEED)
+        segment.width = 15
+        segment.height = 25
+        
+        # Create visual widget for the segment on the fullscreen window
+        segment.widget = tk.Frame(
+            self.screen_window,
+            bg=segment.color,
+            width=segment.width,
+            height=segment.height,
+            relief='raised',
+            bd=1
+        )
+        segment.widget.place(x=x, y=y)
+        
+        self.segments.append(segment)
+        print(f"💖 Debug: PINK segment spawned at position {x}!")
+    
+    def spawn_debug_gray(self):
+        """Debug: Spawn a GRAY segment manually - Null progress!"""
+        if not self.DEBUG_MODE:
+            return
+        
+        # Random X position within screen bounds
+        x = random.randint(50, self.screen_width - 80)
+        y = -30  # Start above screen
+        
+        segment = Segment(x, y, '#808080', 0, 'gray', self.GRAY_POINTS, self.GRAY_SPEED)
+        segment.width = 15
+        segment.height = 25
+        
+        # Create visual widget for the segment on the fullscreen window
+        segment.widget = tk.Frame(
+            self.screen_window,
+            bg=segment.color,
+            width=segment.width,
+            height=segment.height,
+            relief='raised',
+            bd=1
+        )
+        segment.widget.place(x=x, y=y)
+        
+        self.segments.append(segment)
+        print(f"🔘 Debug: GRAY (NULL) segment spawned at position {x}!")
+    
     def exit_program(self, event=None):
         """Exit the program"""
         self.game_running = False
@@ -393,6 +545,10 @@ class ProgressBar95:
                 self.end_window.destroy()
             if hasattr(self, 'blue_screen'):
                 self.blue_screen.destroy()
+            if hasattr(self, 'pink_win_window'):
+                self.pink_win_window.destroy()
+            if hasattr(self, 'null_win_window'):
+                self.null_win_window.destroy()
         except:
             pass
             
@@ -437,10 +593,12 @@ class ProgressBar95:
         y = -30  # Start above screen
         
         # Calculate spawn probabilities based on weights
-        total_weight = self.BLUE_WEIGHT + self.YELLOW_WEIGHT + self.RED_WEIGHT
+        total_weight = self.BLUE_WEIGHT + self.YELLOW_WEIGHT + self.RED_WEIGHT + self.PINK_WEIGHT + self.GRAY_WEIGHT
         blue_chance = self.BLUE_WEIGHT / total_weight
         yellow_chance = self.YELLOW_WEIGHT / total_weight
-        # red_chance = self.RED_WEIGHT / total_weight (remaining probability)
+        red_chance = self.RED_WEIGHT / total_weight
+        pink_chance = self.PINK_WEIGHT / total_weight
+        # gray_chance = self.GRAY_WEIGHT / total_weight (remaining probability)
         
         # Randomly choose segment type based on weights
         rand = random.random()
@@ -450,9 +608,15 @@ class ProgressBar95:
         elif rand < blue_chance + yellow_chance:
             # Yellow segment (corrupted) - slower speed, fewer points
             segment = Segment(x, y, '#cccc00', 5, 'yellow', self.YELLOW_POINTS, self.YELLOW_SPEED)
-        else:
+        elif rand < blue_chance + yellow_chance + red_chance:
             # RED segment (GAME OVER!) - fast speed, deadly
             segment = Segment(x, y, '#cc0000', 0, 'red', self.RED_POINTS, self.RED_SPEED)
+        elif rand < blue_chance + yellow_chance + red_chance + pink_chance:
+            # PINK segment (removes progress) - same speed as yellow, negative points
+            segment = Segment(x, y, '#ff69b4', 5, 'pink', self.PINK_POINTS, self.PINK_SPEED)
+        else:
+            # GRAY segment (null progress) - no value, no points
+            segment = Segment(x, y, '#808080', 0, 'gray', self.GRAY_POINTS, self.GRAY_SPEED)
         
         # Make segments thinner like progress bar segments
         segment.width = 15  # Thinner like progress bar segments
@@ -497,26 +661,105 @@ class ProgressBar95:
                     segments_to_remove.append(segment)
                     continue
                 
-                # Regular collision logic for other segments
-                collision_x_relative = segment.x - window_x
-                progress_pixels = int((self.progress_value / 100) * (window_width - 20))
-                empty_start = progress_pixels + 10  # Account for padding
-                
-                if collision_x_relative > empty_start:
-                    # Caught in empty area - add colored progress!
-                    success = self.add_progress_segment(
-                        segment.color, 
-                        segment.value, 
-                        segment.segment_type, 
-                        segment.points
-                    )
-                    if success:
-                        print(f"{segment.segment_type.title()} segment caught! +{segment.value}% (+{segment.points} points) -> {self.progress_value}%")
+                # PINK SEGMENT SPECIAL LOGIC
+                if segment.segment_type == 'pink':
+                    # Check collision area first
+                    collision_x_relative = segment.x - window_x
+                    progress_pixels = int((abs(self.progress_value) / 100) * (window_width - 20))  # Use abs for calculation
+                    empty_start = progress_pixels + 10  # Account for padding
+                    
+                    if collision_x_relative <= empty_start and self.progress_value != 0:
+                        # Hit filled area - pink segment breaks
+                        print(f"Pink segment broken on filled area!")
                     else:
-                        print("Progress bar full!")
+                        # Hit empty area - pink segment logic
+                        if self.progress_value > 0:
+                            # Remove a segment from the bar (like - key)
+                            success = self.remove_last_segment()
+                            if success:
+                                self.total_points += segment.points  # Add negative points
+                                self.pink_segments_caught += 1
+                                print(f"Pink segment hit! Removed progress segment! ({segment.points} points) -> {self.progress_value}%")
+                            else:
+                                print("Pink segment hit but no segments to remove!")
+                        else:
+                            # Progress bar is empty or negative - add pink segment
+                            if self.progress_value == 0 and self.null_count == 0 and not self.in_pink_mode:
+                                # First pink on empty bar - just say "PINK"
+                                self.in_pink_mode = True
+                                self.total_points += segment.points
+                                self.pink_segments_caught += 1
+                                self.update_progress_display()
+                                print(f"Pink segment caught in empty bar! PINK mode activated! ({segment.points} points)")
+                            else:
+                                # Continue adding pink segments (from PINK mode or already negative)
+                                success = self.add_progress_segment(
+                                    segment.color, 
+                                    -5,  # Negative 5% 
+                                    segment.segment_type, 
+                                    segment.points
+                                )
+                                if success:
+                                    self.pink_segments_caught += 1
+                                    if self.in_pink_mode:
+                                        print(f"Pink segment caught! Transitioning from PINK mode to {self.progress_value}% ({segment.points} points)")
+                                    else:
+                                        print(f"Pink segment caught! {self.progress_value}% ({segment.points} points)")
+                
+                # GRAY SEGMENT SPECIAL LOGIC  
+                elif segment.segment_type == 'gray':
+                    if self.progress_value == 0 and not self.in_pink_mode:
+                        # Empty bar - increase null count
+                        self.null_count += 1
+                        self.total_points += segment.points  # Add 0 points
+                        self.gray_segments_caught += 1
+                        self.update_progress_display()
+                        print(f"Gray segment caught in empty bar! NULL{(self.null_count-1)*5} ({segment.points} points)")
+                        
+                        # Check for NULL win condition (NULL100 = 21 gray segments)
+                        if self.null_count >= 21:  # NULL100
+                            print("🔘 NULL100 reached! Gray victory!")
+                            if self.SECONDARY_END_SCREENS:
+                                self.end_game_null_win()
+                            else:
+                                self.end_game()  # Use normal end screen
+                    else:
+                        # Not empty or in pink mode - gray does nothing
+                        print("Gray segment hit but bar not empty - no effect!")
+                
                 else:
-                    # Hit filled area - segment breaks
-                    print(f"{segment.segment_type.title()} segment broken on filled area!")
+                    # Regular collision logic for blue/yellow segments
+                    
+                    # If we have pink segments and catch any other segment, remove all pink and reset states
+                    pink_segments_removed = self.remove_all_pink_segments()
+                    if pink_segments_removed > 0:
+                        print(f"Removed {pink_segments_removed} pink segments before adding new segment!")
+                    
+                    # Reset null states when catching normal segments
+                    if self.null_count > 0 or self.in_pink_mode:
+                        self.null_count = 0
+                        self.in_pink_mode = False
+                        print("Reset NULL/PINK mode - adding normal segment")
+                    
+                    collision_x_relative = segment.x - window_x
+                    progress_pixels = int((abs(self.progress_value) / 100) * (window_width - 20))  # Use abs for calculation
+                    empty_start = progress_pixels + 10  # Account for padding
+                    
+                    if collision_x_relative > empty_start:
+                        # Caught in empty area - add colored progress!
+                        success = self.add_progress_segment(
+                            segment.color, 
+                            segment.value, 
+                            segment.segment_type, 
+                            segment.points
+                        )
+                        if success:
+                            print(f"{segment.segment_type.title()} segment caught! +{segment.value}% (+{segment.points} points) -> {self.progress_value}%")
+                        else:
+                            print("Progress bar full!")
+                    else:
+                        # Hit filled area - segment breaks
+                        print(f"{segment.segment_type.title()} segment broken on filled area!")
                 
                 segments_to_remove.append(segment)
         
@@ -806,6 +1049,40 @@ class ProgressBar95:
         # Show end screen
         self.show_end_screen()
     
+    def end_game_pink_win(self):
+        """End the game with pink victory (special win condition)"""
+        self.game_ended = True
+        self.game_running = False
+        
+        # Stop all falling segments
+        for segment in self.segments:
+            if segment.widget:
+                segment.widget.destroy()
+        self.segments.clear()
+        
+        # Hide the fullscreen window
+        self.screen_window.withdraw()
+        
+        # Show special pink win screen
+        self.show_pink_win_screen()
+    
+    def end_game_null_win(self):
+        """End the game with null/gray victory (special win condition)"""
+        self.game_ended = True
+        self.game_running = False
+        
+        # Stop all falling segments
+        for segment in self.segments:
+            if segment.widget:
+                segment.widget.destroy()
+        self.segments.clear()
+        
+        # Hide the fullscreen window
+        self.screen_window.withdraw()
+        
+        # Show special null win screen
+        self.show_null_win_screen()
+    
     def show_end_screen(self):
         """Display the end screen with results"""
         # Create end screen window (increased height to fit all content)
@@ -936,41 +1213,56 @@ class ProgressBar95:
         stats_frame = tk.Frame(self.end_window, bg='#c0c0c0')
         stats_frame.pack(pady=10)
         
-        # Calculate percentages (excluding black segments)
-        total_colored = self.blue_segments_caught + self.yellow_segments_caught
-        if total_colored > 0:
-            blue_percent = round((self.blue_segments_caught / total_colored) * 100)
-            yellow_percent = round((self.yellow_segments_caught / total_colored) * 100)
+        # Calculate percentages (including all segment types)
+        total_segments = (self.blue_segments_caught + self.yellow_segments_caught + 
+                         self.pink_segments_caught + self.gray_segments_caught)
+        if total_segments > 0:
+            blue_percent = round((self.blue_segments_caught / total_segments) * 100)
+            yellow_percent = round((self.yellow_segments_caught / total_segments) * 100)
+            pink_percent = round((self.pink_segments_caught / total_segments) * 100)
+            gray_percent = round((self.gray_segments_caught / total_segments) * 100)
         else:
-            blue_percent = yellow_percent = 0
+            blue_percent = yellow_percent = pink_percent = gray_percent = 0
         
+        # Blue stats
         correct_label = tk.Label(
             stats_frame,
-            text=f"Correct: {blue_percent}%",
-            font=('MS Sans Serif', 12, 'bold'),
+            text=f"Blue (Correct): {blue_percent}% ({self.blue_segments_caught})",
+            font=('MS Sans Serif', 11),
             bg='#c0c0c0',
             fg='#0066cc'
         )
-        correct_label.pack(pady=5)
+        correct_label.pack(pady=2)
         
+        # Yellow stats
         corrupt_label = tk.Label(
             stats_frame,
-            text=f"Corrupt: {yellow_percent}%",
-            font=('MS Sans Serif', 12, 'bold'),
+            text=f"Yellow (Corrupt): {yellow_percent}% ({self.yellow_segments_caught})",
+            font=('MS Sans Serif', 11),
             bg='#c0c0c0',
             fg='#cccc00'
         )
-        corrupt_label.pack(pady=5)
+        corrupt_label.pack(pady=2)
         
-        # Segment counts
-        counts_label = tk.Label(
+        # Pink stats
+        pink_label = tk.Label(
             stats_frame,
-            text=f"Blue: {self.blue_segments_caught} | Yellow: {self.yellow_segments_caught}",
-            font=('MS Sans Serif', 10),
+            text=f"Pink (Negative): {pink_percent}% ({self.pink_segments_caught})",
+            font=('MS Sans Serif', 11),
             bg='#c0c0c0',
-            fg='black'
+            fg='#ff69b4'
         )
-        counts_label.pack(pady=5)
+        pink_label.pack(pady=2)
+        
+        # Gray stats
+        gray_label = tk.Label(
+            stats_frame,
+            text=f"Gray (Null): {gray_percent}% ({self.gray_segments_caught})",
+            font=('MS Sans Serif', 11),
+            bg='#c0c0c0',
+            fg='#808080'
+        )
+        gray_label.pack(pady=2)
     
     def create_pie_chart(self):
         """Create a simple pie chart showing segment distribution"""
@@ -980,26 +1272,36 @@ class ProgressBar95:
         canvas = tk.Canvas(chart_frame, width=200, height=200, bg='white')
         canvas.pack()
         
-        # Calculate angles for pie chart
-        total_colored = self.blue_segments_caught + self.yellow_segments_caught
-        if total_colored == 0:
+        # Calculate angles for pie chart (include all segment types)
+        total_segments = (self.blue_segments_caught + self.yellow_segments_caught + 
+                         self.pink_segments_caught + self.gray_segments_caught)
+        if total_segments == 0:
             # No segments, show empty circle
             canvas.create_oval(10, 10, 190, 190, outline='gray', fill='lightgray', width=2)
             canvas.create_text(100, 100, text="No segments", font=('Arial', 10))
             return
         
-        blue_angle = (self.blue_segments_caught / total_colored) * 360
-        yellow_angle = (self.yellow_segments_caught / total_colored) * 360
-        
-        # Handle special cases for better rendering
-        if self.blue_segments_caught > 0 and self.yellow_segments_caught == 0:
+        # Handle special cases for single-color victories
+        if self.pink_segments_caught > 0 and self.blue_segments_caught == 0 and self.yellow_segments_caught == 0 and self.gray_segments_caught == 0:
+            # All pink - draw full pink circle
+            canvas.create_oval(10, 10, 190, 190, fill='#ff69b4', outline='black', width=2)
+        elif self.gray_segments_caught > 0 and self.blue_segments_caught == 0 and self.yellow_segments_caught == 0 and self.pink_segments_caught == 0:
+            # All gray - draw full gray circle
+            canvas.create_oval(10, 10, 190, 190, fill='#808080', outline='black', width=2)
+        elif self.blue_segments_caught > 0 and self.yellow_segments_caught == 0 and self.pink_segments_caught == 0 and self.gray_segments_caught == 0:
             # All blue - draw full blue circle
             canvas.create_oval(10, 10, 190, 190, fill='#0066cc', outline='black', width=2)
-        elif self.yellow_segments_caught > 0 and self.blue_segments_caught == 0:
+        elif self.yellow_segments_caught > 0 and self.blue_segments_caught == 0 and self.pink_segments_caught == 0 and self.gray_segments_caught == 0:
             # All yellow - draw full yellow circle
             canvas.create_oval(10, 10, 190, 190, fill='#cccc00', outline='black', width=2)
         else:
-            # Mixed colors - draw pie slices
+            # Mixed segments - draw pie slices
+            blue_angle = (self.blue_segments_caught / total_segments) * 360
+            yellow_angle = (self.yellow_segments_caught / total_segments) * 360
+            pink_angle = (self.pink_segments_caught / total_segments) * 360
+            gray_angle = (self.gray_segments_caught / total_segments) * 360
+            
+            # Draw pie slices
             current_angle = 0
             
             # Blue slice
@@ -1008,12 +1310,188 @@ class ProgressBar95:
                                 start=current_angle, extent=blue_angle,
                                 fill='#0066cc', outline='black', width=2)
                 current_angle += blue_angle
-            
+                
             # Yellow slice
             if yellow_angle > 0:
                 canvas.create_arc(10, 10, 190, 190, 
                                 start=current_angle, extent=yellow_angle,
                                 fill='#cccc00', outline='black', width=2)
+                current_angle += yellow_angle
+                
+            # Pink slice
+            if pink_angle > 0:
+                canvas.create_arc(10, 10, 190, 190, 
+                                start=current_angle, extent=pink_angle,
+                                fill='#ff69b4', outline='black', width=2)
+                current_angle += pink_angle
+                
+            # Gray slice
+            if gray_angle > 0:
+                canvas.create_arc(10, 10, 190, 190, 
+                                start=current_angle, extent=gray_angle,
+                                fill='#808080', outline='black', width=2)
+    
+    def show_pink_win_screen(self):
+        """Display special pink victory screen"""
+        # Create pink win screen window
+        self.pink_win_window = tk.Toplevel(self.root)
+        self.pink_win_window.title("Progressbar 95 - PINK VICTORY!")
+        self.pink_win_window.geometry("500x400+200+100")
+        self.pink_win_window.configure(bg='#ff69b4')  # Pink background
+        self.pink_win_window.attributes('-topmost', True)
+        self.pink_win_window.resizable(True, True)
+        
+        # Victory title
+        title_label = tk.Label(
+            self.pink_win_window,
+            text="🎉 PINK VICTORY! 🎉",
+            font=('MS Sans Serif', 20, 'bold'),
+            bg='#ff69b4',
+            fg='white'
+        )
+        title_label.pack(pady=30)
+        
+        # Sub title
+        subtitle_label = tk.Label(
+            self.pink_win_window,
+            text="You filled the bar with pink segments!",
+            font=('MS Sans Serif', 14),
+            bg='#ff69b4',
+            fg='white'
+        )
+        subtitle_label.pack(pady=10)
+        
+        # Progress bar showing -100%
+        bar_frame = tk.Frame(
+            self.pink_win_window,
+            relief='sunken',
+            bd=2,
+            bg='#c0c0c0'
+        )
+        bar_frame.pack(pady=30, padx=50, fill='x')
+        
+        progress_frame = tk.Frame(
+            bar_frame,
+            relief='sunken',
+            bd=1,
+            bg='#ff69b4',  # Full pink bar
+            height=32
+        )
+        progress_frame.pack(fill='both', expand=True, padx=5, pady=5)
+        
+        # -100% text
+        percent_label = tk.Label(
+            progress_frame,
+            text="-100%",
+            font=('MS Sans Serif', 12, 'bold'),
+            fg='white',
+            bg='#ff69b4'
+        )
+        percent_label.place(relx=0.5, rely=0.5, anchor='center')
+        
+        # Points display
+        points_label = tk.Label(
+            self.pink_win_window,
+            text=f"Final Score: {self.total_points} points",
+            font=('MS Sans Serif', 14, 'bold'),
+            bg='#ff69b4',
+            fg='white'
+        )
+        points_label.pack(pady=20)
+        
+        # Close button
+        close_btn = tk.Button(
+            self.pink_win_window,
+            text="Close Game",
+            font=('MS Sans Serif', 12),
+            command=self.exit_program,
+            relief='raised',
+            bd=2,
+            bg='white',
+            fg='black'
+        )
+        close_btn.pack(pady=20)
+    
+    def show_null_win_screen(self):
+        """Display special null/gray victory screen"""
+        # Create null win screen window
+        self.null_win_window = tk.Toplevel(self.root)
+        self.null_win_window.title("Progressbar 95 - NULL VICTORY!")
+        self.null_win_window.geometry("500x400+200+100")
+        self.null_win_window.configure(bg='#808080')  # Gray background
+        self.null_win_window.attributes('-topmost', True)
+        self.null_win_window.resizable(True, True)
+        
+        # Victory title
+        title_label = tk.Label(
+            self.null_win_window,
+            text="🔘 NULL VICTORY! 🔘",
+            font=('MS Sans Serif', 20, 'bold'),
+            bg='#808080',
+            fg='white'
+        )
+        title_label.pack(pady=30)
+        
+        # Sub title
+        subtitle_label = tk.Label(
+            self.null_win_window,
+            text="You reached NULL100 with gray segments!",
+            font=('MS Sans Serif', 14),
+            bg='#808080',
+            fg='white'
+        )
+        subtitle_label.pack(pady=10)
+        
+        # Progress bar showing NULL100
+        bar_frame = tk.Frame(
+            self.null_win_window,
+            relief='sunken',
+            bd=2,
+            bg='#c0c0c0'
+        )
+        bar_frame.pack(pady=30, padx=50, fill='x')
+        
+        progress_frame = tk.Frame(
+            bar_frame,
+            relief='sunken',
+            bd=1,
+            bg='#9e9e9e',  # Empty gray bar (no segments)
+            height=32
+        )
+        progress_frame.pack(fill='both', expand=True, padx=5, pady=5)
+        
+        # NULL100 text
+        percent_label = tk.Label(
+            progress_frame,
+            text="NULL100",
+            font=('MS Sans Serif', 12, 'bold'),
+            fg='#808080',
+            bg='#9e9e9e'
+        )
+        percent_label.place(relx=0.5, rely=0.5, anchor='center')
+        
+        # Points display
+        points_label = tk.Label(
+            self.null_win_window,
+            text=f"Final Score: {self.total_points} points",
+            font=('MS Sans Serif', 14, 'bold'),
+            bg='#808080',
+            fg='white'
+        )
+        points_label.pack(pady=20)
+        
+        # Close button
+        close_btn = tk.Button(
+            self.null_win_window,
+            text="Close Game",
+            font=('MS Sans Serif', 12),
+            command=self.exit_program,
+            relief='raised',
+            bd=2,
+            bg='white',
+            fg='black'
+        )
+        close_btn.pack(pady=20)
     
     def remove_segment(self, segment):
         """Remove a segment from the game"""
