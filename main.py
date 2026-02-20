@@ -48,6 +48,7 @@ class ProgressBar95:
         self.RED_SPEED = 4       # Red segments fall FAST (game over segments!) / Default 4 for extra danger
         self.PINK_SPEED = 2      # Pink segments fall same speed as yellow / Default 2
         self.GRAY_SPEED = 2      # Gray segments fall same speed as yellow / Default 2
+        self.MAX_SPEED_MULTIPLIER = 10.0  # Maximum speed multiplier at 95% progress (1x at 0%, this value at 95%)
         
         # ===========================================
         # EASY POINTS CONFIGURATION - ADJUST THESE!
@@ -62,8 +63,9 @@ class ProgressBar95:
         # ===========================================
         # DEBUG CONFIGURATION - ADJUST THIS!
         # ===========================================
-        self.DEBUG_MODE = True   # Enable/disable debug controls (- = keys and B Y spawning)
-        self.DEBUG_SHOW_PATHS = True  # Show dotted target boxes and trace lines for segments
+        self.DEBUG_MODE = False   # Enable/disable debug controls (- = keys and B Y spawning)
+        self.DEBUG_SHOW_PATHS = False  # Show dotted target boxes and trace lines for segments
+        self.SCAN_PROGRESS_PER_CLICK = 1.5  # How much % progress each click gives in scan recovery (lower = harder) / Default 8%
         self.SECONDARY_END_SCREENS = False  # Enable special end screens (pink win, etc.) vs normal end screen only
         
         # ===========================================
@@ -71,7 +73,7 @@ class ProgressBar95:
         # ===========================================
         self.BLUE_WEIGHT = 50    # Blue segments spawn most often
         self.YELLOW_WEIGHT = 25  # Yellow segments spawn regularly  
-        self.RED_WEIGHT = 5      # Red segments spawn rarely (DANGER!)
+        self.RED_WEIGHT = 10     # Red segments spawn more often now (DANGER!)
         self.PINK_WEIGHT = 10    # Pink segments spawn occasionally (remove progress)
         self.GRAY_WEIGHT = 10    # Gray segments spawn occasionally (null progress)
         
@@ -267,10 +269,17 @@ class ProgressBar95:
         if self.null_count > 0 and self.progress_value == 0:
             # NULL mode - show NULL# but no visual segment
             null_text = f"NULL{(self.null_count-1)*5}"
+            if self.DEBUG_MODE:
+                speed_mult = self.get_speed_multiplier()
+                null_text += f" [{speed_mult:.1f}x]"
             self.percent_label.config(text=null_text, fg="#808080")  # Gray text for NULL
         elif self.in_pink_mode and self.progress_value == 0:
             # PINK mode - show PINK but no visual segment
-            self.percent_label.config(text="PINK", fg="#ff69b4")  # Pink text
+            pink_text = "PINK"
+            if self.DEBUG_MODE:
+                speed_mult = self.get_speed_multiplier()
+                pink_text += f" [{speed_mult:.1f}x]"
+            self.percent_label.config(text=pink_text, fg="#ff69b4")  # Pink text
         else:
             # Normal mode - calculate segments and show percentage
             current_x = 0
@@ -293,12 +302,35 @@ class ProgressBar95:
             # Update percentage text color based on value
             if self.progress_value < 0:
                 # Pink text for negative values
-                self.percent_label.config(text=f"{self.progress_value}%", fg="#ff69b4")
+                display_text = f"{self.progress_value}%"
             else:
-                # White text for positive values
-                self.percent_label.config(text=f"{self.progress_value}%", fg="white")
+                # White text for positive values  
+                display_text = f"{self.progress_value}%"
+            
+            # Add speed multiplier for debug mode
+            if self.DEBUG_MODE:
+                speed_mult = self.get_speed_multiplier()
+                display_text += f" [{speed_mult:.1f}x]"
+            
+            if self.progress_value < 0:
+                self.percent_label.config(text=display_text, fg="#ff69b4")
+            else:
+                self.percent_label.config(text=display_text, fg="white")
                 
         self.percent_label.lift()  # Keep percentage text visible above colored segments
+    
+    def get_speed_multiplier(self):
+        """Calculate speed multiplier based on absolute progress (1x at 0%, configurable max at 95%)"""
+        # Use absolute progress value (works for positive, negative, or NULL progress)
+        if self.null_count > 0:
+            # NULL progress equivalent percentage
+            abs_progress = min(95, (self.null_count - 1) * 5)
+        else:
+            abs_progress = min(95, abs(self.progress_value))
+        
+        # Linear scaling: 1x at 0% to MAX_SPEED_MULTIPLIER at 95%
+        multiplier = 1 + (abs_progress / 95) * (self.MAX_SPEED_MULTIPLIER - 1)
+        return multiplier
     
     def set_progress(self, value):
         """Set the progress value (0-100)"""
@@ -561,6 +593,10 @@ class ProgressBar95:
         segment.width = 15
         segment.height = 25
         
+        # Apply speed multiplier based on current progress
+        speed_mult = self.get_speed_multiplier()
+        segment.speed = int(segment.speed * speed_mult)
+        
         # Setup target positions for path-based movement
         self.setup_segment_targets(segment)
         
@@ -593,6 +629,10 @@ class ProgressBar95:
         segment = Segment(x, y, '#cccc00', 5, 'yellow', self.YELLOW_POINTS, self.YELLOW_SPEED, self.YELLOW_WOBBLE_RANGE)
         segment.width = 15
         segment.height = 25
+        
+        # Apply speed multiplier based on current progress
+        speed_mult = self.get_speed_multiplier()
+        segment.speed = int(segment.speed * speed_mult)
         
         # Setup target positions for path-based movement
         self.setup_segment_targets(segment)
@@ -627,6 +667,10 @@ class ProgressBar95:
         segment.width = 15
         segment.height = 25
         
+        # Apply speed multiplier based on current progress
+        speed_mult = self.get_speed_multiplier()
+        segment.speed = int(segment.speed * speed_mult)
+        
         # Setup target positions for path-based movement
         self.setup_segment_targets(segment)
         
@@ -660,6 +704,10 @@ class ProgressBar95:
         segment.width = 15
         segment.height = 25
         
+        # Apply speed multiplier based on current progress
+        speed_mult = self.get_speed_multiplier()
+        segment.speed = int(segment.speed * speed_mult)
+        
         # Setup target positions for path-based movement
         self.setup_segment_targets(segment)
         
@@ -692,6 +740,10 @@ class ProgressBar95:
         segment = Segment(x, y, '#808080', 0, 'gray', self.GRAY_POINTS, self.GRAY_SPEED, self.GRAY_WOBBLE_RANGE)
         segment.width = 15
         segment.height = 25
+        
+        # Apply speed multiplier based on current progress
+        speed_mult = self.get_speed_multiplier()
+        segment.speed = int(segment.speed * speed_mult)
         
         # Setup target positions for path-based movement
         self.setup_segment_targets(segment)
@@ -760,7 +812,10 @@ class ProgressBar95:
                 current_time - self.last_spawn_time > self.spawn_delay):
                 self.spawn_segment()
                 self.last_spawn_time = current_time
-                self.spawn_delay = random.uniform(1.0, 3.0)  # Random next spawn
+                # Calculate next spawn delay with speed multiplier
+                speed_mult = self.get_speed_multiplier()
+                base_delay = random.uniform(1.0, 3.0) 
+                self.spawn_delay = base_delay / speed_mult  # Faster spawning = shorter delay
             
             # Update all segments
             self.update_segments()
@@ -807,6 +862,10 @@ class ProgressBar95:
         # Make segments thinner like progress bar segments
         segment.width = 15  # Thinner like progress bar segments
         segment.height = 25
+        
+        # Apply speed multiplier based on current progress
+        speed_mult = self.get_speed_multiplier()
+        segment.speed = int(segment.speed * speed_mult)  # Apply multiplier to segment speed
         
         # Setup target positions for path-based movement
         self.setup_segment_targets(segment)
@@ -1047,7 +1106,8 @@ class ProgressBar95:
         # Error message
         error_text = tk.Label(
             self.blue_screen,
-            text="⚠️ CRITICAL SYSTEM ERROR ⚠️\n\nA red segment has corrupted the progress bar.\nSystem recovery options:",
+            # text="⚠️ CRITICAL SYSTEM ERROR ⚠️\n\nA red segment has corrupted the progress bar.\nSystem recovery options:",
+            text="⚠️ GAME OVER ⚠️\n\nA fatal mistake has been made by the player.\nThe current game session will be terminated.\n\n* Press the key to terminate the current session\n* Don't press CTRL+ALT+DEL to restart",
             font=('MS Sans Serif', 16, 'bold'),
             bg='#002eb3',
             fg='white',
@@ -1090,6 +1150,10 @@ class ProgressBar95:
         """Start the scan progress mini-game"""
         # Mark scan progress as used
         self.scan_progress_used = True
+        
+        # Apply point penalty for using scan progress
+        self.total_points -= 1000
+        print(f"Using Scan Progress! -1000 points penalty -> {self.total_points} total points")
         
         # Clear blue screen content
         for widget in self.blue_screen.winfo_children():
@@ -1154,7 +1218,7 @@ class ProgressBar95:
         if not self.scan_active:
             return
             
-        self.scan_progress += 8  # Each click = 8% progress
+        self.scan_progress += self.SCAN_PROGRESS_PER_CLICK  # Each click = configurable% progress
         if self.scan_progress > 100:
             self.scan_progress = 100
             
@@ -1345,6 +1409,16 @@ class ProgressBar95:
             fg='blue'
         )
         points_label.pack(pady=10)
+
+        if self.scan_progress_used:
+            penalty_label = tk.Label(
+                self.end_window,
+                text="-1000 points (Scan Progress)",
+                font=('MS Sans Serif', 11, 'bold'),
+                bg='#c0c0c0',
+                fg='red'
+            )
+            penalty_label.pack(pady=2)
         
         # Debug indicator
         if self.DEBUG_MODE:
@@ -1637,6 +1711,16 @@ class ProgressBar95:
             fg='white'
         )
         points_label.pack(pady=20)
+
+        if self.scan_progress_used:
+            penalty_label = tk.Label(
+                self.pink_win_window,
+                text="-1000 points (Scan Progress)",
+                font=('MS Sans Serif', 11, 'bold'),
+                bg='#ff69b4',
+                fg='white'
+            )
+            penalty_label.pack(pady=2)
         
         # Close button
         close_btn = tk.Button(
@@ -1718,6 +1802,16 @@ class ProgressBar95:
             fg='white'
         )
         points_label.pack(pady=20)
+
+        if self.scan_progress_used:
+            penalty_label = tk.Label(
+                self.null_win_window,
+                text="-1000 points (Scan Progress)",
+                font=('MS Sans Serif', 11, 'bold'),
+                bg='#808080',
+                fg='white'
+            )
+            penalty_label.pack(pady=2)
         
         # Close button
         close_btn = tk.Button(
