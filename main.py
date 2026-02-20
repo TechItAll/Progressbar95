@@ -37,6 +37,11 @@ class ProgressBar95:
         self.BLUE_POINTS = 100   # Points for catching blue segments
         self.YELLOW_POINTS = 50  # Points for catching yellow segments (corrupted)
         self.BLACK_POINTS = 0    # Points for black segments (debug only)
+        
+        # ===========================================
+        # DEBUG CONFIGURATION - ADJUST THIS!
+        # ===========================================
+        self.DEBUG_MODE = True   # Enable/disable debug controls (- = keys and B Y spawning)
         # ===========================================
         
         self.root = tk.Tk()
@@ -144,8 +149,13 @@ class ProgressBar95:
         # Bind keyboard controls
         self.root.bind('<Escape>', self.exit_program)
         self.root.bind('<Control-c>', self.exit_program)
-        self.root.bind('<KeyPress-minus>', lambda e: self.decrease_progress())
-        self.root.bind('<KeyPress-equal>', lambda e: self.increase_progress())  # = key (plus without shift)
+        
+        # Debug-controlled keyboard shortcuts
+        if self.DEBUG_MODE:
+            self.root.bind('<KeyPress-minus>', lambda e: self.decrease_progress())
+            self.root.bind('<KeyPress-equal>', lambda e: self.increase_progress())  # = key (plus without shift)
+            self.root.bind('<KeyPress-b>', lambda e: self.spawn_debug_blue())
+            self.root.bind('<KeyPress-y>', lambda e: self.spawn_debug_yellow())
         
         # Make sure the window can receive keyboard focus
         self.root.focus_set()
@@ -247,19 +257,79 @@ class ProgressBar95:
     
     def increase_progress(self):
         """Add a black segment (5%)"""
+        if not self.DEBUG_MODE:
+            return
+            
         success = self.add_progress_segment('#000000', 5, 'black', self.BLACK_POINTS)  # Use configurable points
         if success:
-            print(f"Black debug segment added! +5% -> {self.progress_value}%")
+            print(f"Debug: Black segment added! +5% -> {self.progress_value}%")
         else:
             print("Progress bar full - cannot add more segments!")
     
     def decrease_progress(self):
         """Remove the last segment"""
+        if not self.DEBUG_MODE:
+            return
+            
         success = self.remove_last_segment()
         if success:
-            print(f"Last segment removed! -> {self.progress_value}%")
+            print(f"Debug: Last segment removed! -> {self.progress_value}%")
         else:
             print("No segments to remove!")
+    
+    def spawn_debug_blue(self):
+        """Debug: Spawn a blue segment manually"""
+        if not self.DEBUG_MODE:
+            return
+        
+        # Random X position within screen bounds
+        x = random.randint(50, self.screen_width - 80)
+        y = -30  # Start above screen
+        
+        segment = Segment(x, y, '#0066cc', 5, 'blue', self.BLUE_POINTS, self.BLUE_SPEED)
+        segment.width = 15
+        segment.height = 25
+        
+        # Create visual widget for the segment on the fullscreen window
+        segment.widget = tk.Frame(
+            self.screen_window,
+            bg=segment.color,
+            width=segment.width,
+            height=segment.height,
+            relief='raised',
+            bd=1
+        )
+        segment.widget.place(x=x, y=y)
+        
+        self.segments.append(segment)
+        print(f"Debug: Blue segment spawned at position {x}")
+    
+    def spawn_debug_yellow(self):
+        """Debug: Spawn a yellow segment manually"""
+        if not self.DEBUG_MODE:
+            return
+        
+        # Random X position within screen bounds
+        x = random.randint(50, self.screen_width - 80)
+        y = -30  # Start above screen
+        
+        segment = Segment(x, y, '#cccc00', 5, 'yellow', self.YELLOW_POINTS, self.YELLOW_SPEED)
+        segment.width = 15
+        segment.height = 25
+        
+        # Create visual widget for the segment on the fullscreen window
+        segment.widget = tk.Frame(
+            self.screen_window,
+            bg=segment.color,
+            width=segment.width,
+            height=segment.height,
+            relief='raised',
+            bd=1
+        )
+        segment.widget.place(x=x, y=y)
+        
+        self.segments.append(segment)
+        print(f"Debug: Yellow segment spawned at position {x}")
     
     def exit_program(self, event=None):
         """Exit the program"""
@@ -426,12 +496,13 @@ class ProgressBar95:
     
     def show_end_screen(self):
         """Display the end screen with results"""
-        # Create end screen window
+        # Create end screen window (increased height to fit all content)
         self.end_window = tk.Toplevel(self.root)
         self.end_window.title("Progressbar 95 - Complete!")
-        self.end_window.geometry("500x600+200+100")
+        self.end_window.geometry("500x700+200+100")  # Increased height from 600 to 700
         self.end_window.configure(bg='#c0c0c0')
         self.end_window.attributes('-topmost', True)
+        self.end_window.resizable(True, True)  # Allow resizing
         
         # Title
         title_label = tk.Label(
@@ -462,6 +533,17 @@ class ProgressBar95:
         )
         points_label.pack(pady=10)
         
+        # Debug indicator
+        if self.DEBUG_MODE:
+            debug_label = tk.Label(
+                self.end_window,
+                text="⚠️ DEBUGGING MODE ON",
+                font=('MS Sans Serif', 12, 'bold'),
+                bg='#c0c0c0',
+                fg='red'
+            )
+            debug_label.pack(pady=5)
+        
         # Close button
         close_btn = tk.Button(
             self.end_window,
@@ -483,36 +565,25 @@ class ProgressBar95:
         )
         bar_frame.pack(pady=20, padx=50, fill='x')
         
-        progress_frame = tk.Frame(
+        self.end_progress_frame = tk.Frame(
             bar_frame,
             relief='sunken',
             bd=1,
             bg='#9e9e9e',
             height=32
         )
-        progress_frame.pack(fill='both', expand=True, padx=5, pady=5)
-        progress_frame.pack_propagate(False)
+        self.end_progress_frame.pack(fill='both', expand=True, padx=5, pady=5)
+        self.end_progress_frame.pack_propagate(False)
         
-        # Recreate segments
-        current_x = 0
-        total_width = 400  # Fixed width for end screen
+        # Store the frame reference for dynamic width calculation
+        self.end_progress_frame.update_idletasks()  # Force geometry update
         
-        for segment in self.progress_segments:
-            segment_width = int((segment['value'] / 100) * total_width)
-            if segment_width > 0:
-                fill = tk.Frame(
-                    progress_frame,
-                    bg=segment['color'],
-                    height=32,
-                    bd=0,
-                    relief='flat'
-                )
-                fill.place(x=current_x, y=0, width=segment_width, height=32)
-                current_x += segment_width
+        # Use after() to ensure frame is properly sized before placing segments
+        self.end_window.after(10, self.place_end_screen_segments)
         
         # Add percentage text
         percent_label = tk.Label(
-            progress_frame,
+            self.end_progress_frame,
             text="100%",
             font=('MS Sans Serif', 10, 'bold'),
             fg='white',
@@ -521,6 +592,32 @@ class ProgressBar95:
             bg='#9e9e9e'
         )
         percent_label.place(relx=0.5, rely=0.5, anchor='center')
+    
+    def place_end_screen_segments(self):
+        """Place progress segments with dynamic width calculation"""
+        # Get actual frame width after it's been rendered
+        self.end_progress_frame.update_idletasks()
+        actual_width = self.end_progress_frame.winfo_width()
+        
+        # Fallback to minimum width if not yet sized
+        if actual_width <= 1:
+            actual_width = 400
+        
+        # Recreate segments with dynamic width
+        current_x = 0
+        
+        for segment in self.progress_segments:
+            segment_width = int((segment['value'] / 100) * actual_width)
+            if segment_width > 0:
+                fill = tk.Frame(
+                    self.end_progress_frame,
+                    bg=segment['color'],
+                    height=32,
+                    bd=0,
+                    relief='flat'
+                )
+                fill.place(x=current_x, y=0, width=segment_width, height=32)
+                current_x += segment_width
     
     def create_end_screen_stats(self):
         """Create statistics display"""
@@ -582,21 +679,29 @@ class ProgressBar95:
         blue_angle = (self.blue_segments_caught / total_colored) * 360
         yellow_angle = (self.yellow_segments_caught / total_colored) * 360
         
-        # Draw pie slices
-        current_angle = 0
-        
-        # Blue slice
-        if blue_angle > 0:
-            canvas.create_arc(10, 10, 190, 190, 
-                            start=current_angle, extent=blue_angle,
-                            fill='#0066cc', outline='black', width=2)
-            current_angle += blue_angle
-        
-        # Yellow slice
-        if yellow_angle > 0:
-            canvas.create_arc(10, 10, 190, 190, 
-                            start=current_angle, extent=yellow_angle,
-                            fill='#cccc00', outline='black', width=2)
+        # Handle special cases for better rendering
+        if self.blue_segments_caught > 0 and self.yellow_segments_caught == 0:
+            # All blue - draw full blue circle
+            canvas.create_oval(10, 10, 190, 190, fill='#0066cc', outline='black', width=2)
+        elif self.yellow_segments_caught > 0 and self.blue_segments_caught == 0:
+            # All yellow - draw full yellow circle
+            canvas.create_oval(10, 10, 190, 190, fill='#cccc00', outline='black', width=2)
+        else:
+            # Mixed colors - draw pie slices
+            current_angle = 0
+            
+            # Blue slice
+            if blue_angle > 0:
+                canvas.create_arc(10, 10, 190, 190, 
+                                start=current_angle, extent=blue_angle,
+                                fill='#0066cc', outline='black', width=2)
+                current_angle += blue_angle
+            
+            # Yellow slice
+            if yellow_angle > 0:
+                canvas.create_arc(10, 10, 190, 190, 
+                                start=current_angle, extent=yellow_angle,
+                                fill='#cccc00', outline='black', width=2)
     
     def remove_segment(self, segment):
         """Remove a segment from the game"""
